@@ -69,7 +69,7 @@ func TestReader(t *testing.T) {
 			require.NoError(t, err)
 			done := make(chan bool)
 			defer func() {
-				_ = reader.Close()
+				require.NoError(t, reader.Close())
 			}()
 
 			addr, err := net.ResolveUDPAddr("udp", reader.Addr())
@@ -77,7 +77,7 @@ func TestReader(t *testing.T) {
 			conn, err := net.DialUDP("udp", nil, addr)
 			require.NoError(t, err)
 			defer func() {
-				_ = conn.Close()
+				require.NoError(t, conn.Close())
 			}()
 
 			receivedMessages := make([]Message, 0, len(data.expectedMessages))
@@ -173,7 +173,7 @@ func TestReaderCleaningProcess(t *testing.T) {
 	reader, err := newReader(":0", maxMessageTimeout, defarmentatorsCleanUpInterval)
 	require.NoError(t, err)
 	defer func() {
-		_ = reader.Close()
+		require.NoError(t, reader.Close())
 	}()
 
 	addr, err := net.ResolveUDPAddr("udp", reader.Addr())
@@ -182,7 +182,7 @@ func TestReaderCleaningProcess(t *testing.T) {
 	conn, err := net.DialUDP("udp", nil, addr)
 	require.NoError(t, err)
 	defer func() {
-		_ = conn.Close()
+		require.NoError(t, conn.Close())
 	}()
 
 	notChunkedMessage := prepareUDPMessages(t, createMessage("a", 10))[0]
