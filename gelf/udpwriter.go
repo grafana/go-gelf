@@ -28,6 +28,7 @@ type UDPWriter struct {
 // to the graylog2 server
 type CompressType int
 
+//go:generate stringer -type=CompressType
 const (
 	CompressGzip CompressType = iota
 	CompressZlib
