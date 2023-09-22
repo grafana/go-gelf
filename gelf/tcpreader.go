@@ -23,12 +23,12 @@ func newTCPReader(addr string) (*TCPReader, chan string, chan string, error) {
 	var err error
 	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("ResolveTCPAddr('%s'): %s", addr, err)
+		return nil, nil, nil, fmt.Errorf("ResolveTCPAddr('%s'): %w", addr, err)
 	}
 
 	listener, err := net.ListenTCP("tcp", tcpAddr)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("ListenTCP: %s", err)
+		return nil, nil, nil, fmt.Errorf("ListenTCP: %w", err)
 	}
 
 	r := &TCPReader{

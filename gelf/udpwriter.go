@@ -72,7 +72,7 @@ func (w *GelfWriter) writeChunked(zBytes []byte) (err error) {
 	msgId := make([]byte, 8)
 	n, err := io.ReadFull(rand.Reader, msgId)
 	if err != nil || n != 8 {
-		return fmt.Errorf("rand.Reader: %d/%s", n, err)
+		return fmt.Errorf("rand.Reader: %d:%w", n, err)
 	}
 
 	bytesLeft := len(zBytes)
@@ -97,8 +97,7 @@ func (w *GelfWriter) writeChunked(zBytes []byte) (err error) {
 		// write this chunk, and make sure the write was good
 		n, err := w.conn.Write(buf.Bytes())
 		if err != nil {
-			return fmt.Errorf("Write (chunk %d/%d): %s", i,
-				nChunks, err)
+			return fmt.Errorf("Write (chunk %d/%d): %w", i, nChunks, err)
 		}
 		if n != len(buf.Bytes()) {
 			return fmt.Errorf("Write len: (chunk %d/%d) (%d/%d)",
