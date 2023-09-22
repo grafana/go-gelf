@@ -40,12 +40,12 @@ func newReader(addr string, maxMessageTimeout time.Duration, defarmentatorsClean
 	var err error
 	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
-		return nil, fmt.Errorf("ResolveUDPAddr('%s'): %s", addr, err)
+		return nil, fmt.Errorf("ResolveUDPAddr('%s'): %w", addr, err)
 	}
 
 	conn, err := net.ListenUDP("udp", udpAddr)
 	if err != nil {
-		return nil, fmt.Errorf("ListenUDP: %s", err)
+		return nil, fmt.Errorf("ListenUDP: %w", err)
 	}
 
 	r := new(Reader)
@@ -101,7 +101,7 @@ func (r *Reader) ReadMessage() (*Message, error) {
 		// we need to reset buffer length because we change the length of the buffer to `n` after the reading data from connection
 		cBuf = cBuf[:ChunkSize]
 		if n, err = r.conn.Read(cBuf); err != nil {
-			return nil, fmt.Errorf("Read: %s", err)
+			return nil, fmt.Errorf("Read: %w", err)
 		}
 		// first two bytes contains hardcoded values [0x1e, 0x0f] if message is chunked
 		chunkHead, cBuf = cBuf[:2], cBuf[:n]
@@ -147,12 +147,12 @@ func (r *Reader) ReadMessage() (*Message, error) {
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("NewReader: %s", err)
+		return nil, fmt.Errorf("NewReader: %w", err)
 	}
 
 	msg := new(Message)
 	if err := json.NewDecoder(cReader).Decode(&msg); err != nil {
-		return nil, fmt.Errorf("json.Unmarshal: %s", err)
+		return nil, fmt.Errorf("json.Unmarshal: %w", err)
 	}
 
 	return msg, nil

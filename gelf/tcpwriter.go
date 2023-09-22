@@ -101,7 +101,7 @@ func (w *TCPWriter) writeToSocketWithReconnectAttempts(zBytes []byte) (n int, er
 		return 0, fmt.Errorf("Maximum reconnection attempts was reached; giving up")
 	}
 	if errConn != nil {
-		return 0, fmt.Errorf("Write Failed: %s\nReconnection failed: %s", err, errConn)
+		return 0, fmt.Errorf("Write Failed: %w\nReconnection failed: %w", err, errConn)
 	}
 	return n, nil
 }

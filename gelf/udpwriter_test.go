@@ -12,9 +12,10 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewUDPWriter(t *testing.T) {
@@ -25,67 +26,99 @@ func TestNewUDPWriter(t *testing.T) {
 	}
 }
 
-func sendAndRecv(msgData string, compress CompressType) (*Message, error) {
+func sendAndRecvRaw(t *testing.T, msgData string, compress CompressType) ([]byte, error) {
+	t.Helper()
+
 	r, err := NewReader("127.0.0.1:0")
-	if err != nil {
-		return nil, fmt.Errorf("NewReader: %s", err)
-	}
+	require.NoError(t, err)
+
+	defer r.Close()
 
 	w, err := NewUDPWriter(r.Addr())
-	if err != nil {
-		return nil, fmt.Errorf("NewUDPWriter: %s", err)
-	}
+	require.NoError(t, err)
+
 	w.CompressionType = compress
 
-	if _, err = w.Write([]byte(msgData)); err != nil {
-		return nil, fmt.Errorf("w.Write: %s", err)
-	}
+	_, err = w.Write([]byte(msgData))
+	require.NoError(t, err)
 
 	w.Close()
-	return r.ReadMessage()
+	b := make([]byte, 512)
+	i, err := r.Read(b)
+	require.NoError(t, err)
+
+	return b[:i], nil
 }
 
-func sendAndRecvMsg(msg *Message, compress CompressType) (*Message, error) {
+func sendAndRecv(t *testing.T, msgData string, compress CompressType) *Message {
+	t.Helper()
+
 	r, err := NewReader("127.0.0.1:0")
-	if err != nil {
-		return nil, fmt.Errorf("NewReader: %s", err)
-	}
+	require.NoError(t, err)
+	defer r.Close()
 
 	w, err := NewUDPWriter(r.Addr())
-	if err != nil {
-		return nil, fmt.Errorf("NewUDPWriter: %s", err)
-	}
+	require.NoError(t, err)
+
 	w.CompressionType = compress
 
-	if err = w.WriteMessage(msg); err != nil {
-		return nil, fmt.Errorf("w.Write: %s", err)
-	}
+	_, err = w.Write([]byte(msgData))
+	require.NoError(t, err)
 
 	w.Close()
-	return r.ReadMessage()
+	msg, err := r.ReadMessage()
+	require.NoError(t, err)
+
+	return msg
 }
 
-// tests single-message (non-chunked) messages that are split over
-// multiple lines
+func sendAndRecvMsg(t *testing.T, msg *Message, compress CompressType) *Message {
+	t.Helper()
+
+	r, err := NewReader("127.0.0.1:0")
+	require.NoError(t, err)
+
+	defer r.Close()
+
+	w, err := NewUDPWriter(r.Addr())
+	require.NoError(t, err)
+
+	w.CompressionType = compress
+
+	err = w.WriteMessage(msg)
+	require.NoError(t, err)
+
+	w.Close()
+	res, err := r.ReadMessage()
+	require.NoError(t, err)
+
+	return res
+}
+
+// tests read raw single-message (non-chunked) messages that are split over multiple lines
+func TestReadRawSmallMultiLine(t *testing.T) {
+	for _, tc := range []CompressType{CompressGzip, CompressZlib} {
+		t.Run(fmt.Sprintf("CompressType: %s", tc.String()), func(t *testing.T) {
+			msgData := "awesomesauce\nbananas"
+
+			raw, err := sendAndRecvRaw(t, msgData, tc)
+			require.NoError(t, err)
+
+			require.Equal(t, msgData, string(raw))
+		})
+	}
+}
+
+// tests single-message (non-chunked) messages that are split over multiple lines
 func TestWriteSmallMultiLine(t *testing.T) {
-	for _, i := range []CompressType{CompressGzip, CompressZlib, CompressNone} {
-		msgData := "awesomesauce\nbananas"
+	for _, tc := range []CompressType{CompressGzip, CompressZlib} {
+		t.Run(fmt.Sprintf("CompressType: %s", tc.String()), func(t *testing.T) {
+			msgData := "awesomesauce\nbananas"
 
-		msg, err := sendAndRecv(msgData, i)
-		if err != nil {
-			t.Errorf("sendAndRecv: %s", err)
-			return
-		}
+			msg := sendAndRecv(t, msgData, tc)
 
-		if msg.Short != "awesomesauce" {
-			t.Errorf("msg.Short: expected %s, got %s", "awesomesauce", msg.Full)
-			return
-		}
-
-		if msg.Full != msgData {
-			t.Errorf("msg.Full: expected %s, got %s", msgData, msg.Full)
-			return
-		}
+			assertMessages(t, msg, "awesomesauce", msgData)
+		})
 	}
 }
 
@@ -94,35 +127,12 @@ func TestWriteSmallOneLine(t *testing.T) {
 	msgData := "some awesome thing\n"
 	msgDataTrunc := msgData[:len(msgData)-1]
 
-	msg, err := sendAndRecv(msgData, CompressGzip)
-	if err != nil {
-		t.Errorf("sendAndRecv: %s", err)
-		return
-	}
+	msg := sendAndRecv(t, msgData, CompressGzip)
+	// should remove the trailing newline
+	assertMessages(t, msg, msgDataTrunc, "")
+	assertHasSuffix(t, msg.Extra["_file"].(string), "/go-gelf/gelf/udpwriter_test.go", "")
 
-	// we should remove the trailing newline
-	if msg.Short != msgDataTrunc {
-		t.Errorf("msg.Short: expected %s, got %s",
-			msgDataTrunc, msg.Short)
-		return
-	}
-
-	if msg.Full != "" {
-		t.Errorf("msg.Full: expected %s, got %s", msgData, msg.Full)
-		return
-	}
-
-	fileExpected := "/go-gelf/gelf/udpwriter_test.go"
-	if !strings.HasSuffix(msg.Extra["_file"].(string), fileExpected) {
-		t.Errorf("msg.File: expected %s, got %s", fileExpected,
-			msg.Extra["_file"].(string))
-		return
-	}
-
-	if len(msg.Extra) != 2 {
-		t.Errorf("extra fields in %v (expect only file and line)", msg.Extra)
-		return
-	}
+	require.Lenf(t, msg.Extra, 2, "expect only file and line")
 }
 
 func TestGetCaller(t *testing.T) {
@@ -133,42 +143,28 @@ func TestGetCaller(t *testing.T) {
 	}
 
 	file, _ = getCaller(0)
-	if !strings.HasSuffix(file, "/gelf/udpwriter_test.go") {
-		t.Errorf("not udpwriter_test.go 1? %s", file)
-	}
+	assertHasSuffix(t, file, "/gelf/udpwriter_test.go", "not udpwriter_test.go 1")
 
 	file, _ = getCallerIgnoringLogMulti(0)
-	if !strings.HasSuffix(file, "/gelf/udpwriter_test.go") {
-		t.Errorf("not udpwriter_test.go 2? %s", file)
-	}
+	assertHasSuffix(t, file, "/gelf/udpwriter_test.go", "not udpwriter_test.go 2")
 }
 
 // tests single-message (chunked) messages
 func TestWriteBigChunked(t *testing.T) {
-	randData := make([]byte, 4096)
-	if _, err := rand.Read(randData); err != nil {
-		t.Errorf("cannot get random data: %s", err)
-		return
+	for _, tc := range []CompressType{CompressGzip, CompressZlib} {
+		t.Run(fmt.Sprintf("CompressType: %s", tc.String()), func(t *testing.T) {
+			randData := make([]byte, 4096)
+			_, err := rand.Read(randData)
+			require.NoError(t, err)
+
+			msgData := "awesomesauce\n" + base64.StdEncoding.EncodeToString(randData)
+
+			msg := sendAndRecv(t, msgData, tc)
+
+			assertMessages(t, msg, "awesomesauce", msgData)
+		})
 	}
-	msgData := "awesomesauce\n" + base64.StdEncoding.EncodeToString(randData)
 
-	for _, i := range []CompressType{CompressGzip, CompressZlib} {
-		msg, err := sendAndRecv(msgData, i)
-		if err != nil {
-			t.Errorf("sendAndRecv: %s", err)
-			return
-		}
-
-		if msg.Short != "awesomesauce" {
-			t.Errorf("msg.Short: expected %s, got %s", msgData, msg.Full)
-			return
-		}
-
-		if msg.Full != msgData {
-			t.Errorf("msg.Full: expected %s, got %s", msgData, msg.Full)
-			return
-		}
-	}
 }
 
 // tests messages with extra data
@@ -197,55 +193,29 @@ func TestExtraData(t *testing.T) {
 		RawExtra: []byte(`{"woo": "hoo"}`),
 	}
 
-	for _, i := range []CompressType{CompressGzip, CompressZlib} {
-		msg, err := sendAndRecvMsg(&m, i)
-		if err != nil {
-			t.Errorf("sendAndRecv: %s", err)
-			return
-		}
+	for _, tc := range []CompressType{CompressGzip, CompressZlib} {
+		t.Run(fmt.Sprintf("CompressType: %s", tc.String()), func(t *testing.T) {
+			msg := sendAndRecvMsg(t, &m, tc)
 
-		if msg.Short != short {
-			t.Errorf("msg.Short: expected %s, got %s", short, msg.Full)
-			return
-		}
-
-		if msg.Full != full {
-			t.Errorf("msg.Full: expected %s, got %s", full, msg.Full)
-			return
-		}
-
-		if len(msg.Extra) != 3 {
-			t.Errorf("extra extra fields in %v", msg.Extra)
-			return
-		}
-
-		if int64(msg.Extra["_a"].(float64)) != extra["_a"].(int64) {
-			t.Errorf("_a didn't roundtrip (%v != %v)", int64(msg.Extra["_a"].(float64)), extra["_a"].(int64))
-			return
-		}
-
-		if string(msg.Extra["_file"].(string)) != extra["_file"] {
-			t.Errorf("_file didn't roundtrip (%v != %v)", msg.Extra["_file"].(string), extra["_file"].(string))
-			return
-		}
-
-		if int(msg.Extra["_line"].(float64)) != extra["_line"].(int) {
-			t.Errorf("_line didn't roundtrip (%v != %v)", int(msg.Extra["_line"].(float64)), extra["_line"].(int))
-			return
-		}
+			assertMessages(t, msg, short, full)
+			require.Len(t, msg.Extra, 3)
+			require.Equalf(t, extra["_a"].(int64), int64(msg.Extra["_a"].(float64)), "_a didn't roundtrip")
+			require.Equalf(t, extra["_file"].(string), msg.Extra["_file"].(string), "_file didn't roundtrip")
+			require.Equalf(t, extra["_line"].(int), int(msg.Extra["_line"].(float64)), "_line didn't roundtrip")
+		})
 	}
 }
 
 func BenchmarkWriteBestSpeed(b *testing.B) {
 	r, err := NewReader("127.0.0.1:0")
-	if err != nil {
-		b.Fatalf("NewReader: %s", err)
-	}
+	require.NoError(b, err)
+
+	defer r.Close()
+
 	go io.Copy(ioutil.Discard, r)
 	w, err := NewUDPWriter(r.Addr())
-	if err != nil {
-		b.Fatalf("NewUDPWriter: %s", err)
-	}
+	require.NoError(b, err)
+
 	w.CompressionLevel = flate.BestSpeed
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -264,14 +234,14 @@ func BenchmarkWriteBestSpeed(b *testing.B) {
 
 func BenchmarkWriteNoCompression(b *testing.B) {
 	r, err := NewReader("127.0.0.1:0")
-	if err != nil {
-		b.Fatalf("NewReader: %s", err)
-	}
+	require.NoError(b, err)
+
+	defer r.Close()
+
 	go io.Copy(ioutil.Discard, r)
 	w, err := NewUDPWriter(r.Addr())
-	if err != nil {
-		b.Fatalf("NewUDPWriter: %s", err)
-	}
+	require.NoError(b, err)
+
 	w.CompressionLevel = flate.NoCompression
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -290,14 +260,14 @@ func BenchmarkWriteNoCompression(b *testing.B) {
 
 func BenchmarkWriteDisableCompressionCompletely(b *testing.B) {
 	r, err := NewReader("127.0.0.1:0")
-	if err != nil {
-		b.Fatalf("NewReader: %s", err)
-	}
+	require.NoError(b, err)
+
+	defer r.Close()
+
 	go io.Copy(ioutil.Discard, r)
 	w, err := NewUDPWriter(r.Addr())
-	if err != nil {
-		b.Fatalf("NewUDPWriter: %s", err)
-	}
+	require.NoError(b, err)
+
 	w.CompressionType = CompressNone
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -316,14 +286,14 @@ func BenchmarkWriteDisableCompressionCompletely(b *testing.B) {
 
 func BenchmarkWriteDisableCompressionAndPreencodeExtra(b *testing.B) {
 	r, err := NewReader("127.0.0.1:0")
-	if err != nil {
-		b.Fatalf("NewReader: %s", err)
-	}
+	require.NoError(b, err)
+
+	defer r.Close()
+
 	go io.Copy(ioutil.Discard, r)
 	w, err := NewUDPWriter(r.Addr())
-	if err != nil {
-		b.Fatalf("NewUDPWriter: %s", err)
-	}
+	require.NoError(b, err)
+
 	w.CompressionType = CompressNone
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

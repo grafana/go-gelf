@@ -3,11 +3,11 @@ package gelf
 import (
 	"crypto/rand"
 	"encoding/base64"
-	"errors"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewTCPWriter(t *testing.T) {
@@ -20,118 +20,78 @@ func TestNewTCPWriter(t *testing.T) {
 
 func TestNewTCPWriterConfig(t *testing.T) {
 	r, _, _, err := newTCPReader("127.0.0.1:0")
-	if err != nil {
-		t.Error("Could not open TCPReader")
-		return
-	}
+	require.NoError(t, err)
+
 	w, err := NewTCPWriter(r.addr())
-	if err != nil {
-		t.Errorf("NewTCPWriter: %s", err)
-		return
-	}
+	require.NoError(t, err)
 
-	if w.MaxReconnect != 3 {
-		t.Errorf("Default MaxReconnect: expected %d, got %d", 3, w.MaxReconnect)
-		return
-	}
+	require.Equalf(t, DefaultMaxReconnect, w.MaxReconnect, "Default MaxReconnect")
 	w.MaxReconnect = 5
-	if w.MaxReconnect != 5 {
-		t.Errorf("Custom MaxReconnect: expected %d, got %d", 5, w.MaxReconnect)
-		return
-	}
+	require.Equalf(t, 5, w.MaxReconnect, "Custom MaxReconnect")
 
-	if w.ReconnectDelay != 1 {
-		t.Errorf("Default ReconnectDelay: expected %d, got %d", 1, w.ReconnectDelay)
-		return
-	}
+	require.Equalf(t, time.Duration(DefaultReconnectDelay), w.ReconnectDelay, "Default ReconnectDelay")
 	w.ReconnectDelay = 5
-	if w.ReconnectDelay != 5 {
-		t.Errorf("Custom ReconnectDelay: expected %d, got %d", 5, w.ReconnectDelay)
-		return
-	}
+	require.Equalf(t, time.Duration(5), w.ReconnectDelay, "Custom ReconnectDelay")
 }
 
-func assertMessages(msg *Message, short, full string, t *testing.T) {
-	if msg.Short != short {
-		t.Errorf("msg.Short: expected %s, got %s", short, msg.Short)
-		return
-	}
+func assertMessages(t *testing.T, msg *Message, short, full string) {
+	t.Helper()
 
-	if msg.Full != full {
-		t.Errorf("msg.Full: expected %s, got %s", full, msg.Full)
-	}
+	require.Equalf(t, short, msg.Short, "msg.Short")
+	require.Equalf(t, full, msg.Full, "msg.Full")
+}
 
+func assertHasSuffix(t *testing.T, str string, sfx string, msg string) {
+	t.Helper()
+
+	if !strings.HasSuffix(str, sfx) {
+		t.Errorf("expected %s, got %s: %s", sfx, str, msg)
+	}
 }
 
 func TestWriteSmallMultiLineTCP(t *testing.T) {
 	msgData := "awesomesauce\nbananas"
 
-	msg, err := sendAndRecvTCP(msgData)
-	if err != nil {
-		t.Errorf("sendAndRecvTCP: %s", err)
-		return
-	}
+	msg := sendAndRecvTCP(t, msgData)
 
-	assertMessages(msg, "awesomesauce", msgData, t)
+	assertMessages(t, msg, "awesomesauce", msgData)
 }
 
 func TestWriteSmallOneLineTCP(t *testing.T) {
 	msgData := "some awesome thing\n"
 	msgDataTrunc := msgData[:len(msgData)-1]
 
-	msg, err := sendAndRecvTCP(msgData)
-	if err != nil {
-		t.Errorf("sendAndRecvTCP: %s", err)
-		return
-	}
+	msg := sendAndRecvTCP(t, msgData)
 
-	assertMessages(msg, msgDataTrunc, "", t)
+	assertMessages(t, msg, msgDataTrunc, "")
 
-	fileExpected := "/go-gelf/gelf/tcpwriter_test.go"
-	if !strings.HasSuffix(msg.Extra["_file"].(string), fileExpected) {
-		t.Errorf("msg.File: expected %s, got %s", fileExpected,
-			msg.Extra["_file"].(string))
-		return
-	}
+	assertHasSuffix(t, msg.Extra["_file"].(string), "/go-gelf/gelf/tcpwriter_test.go", "")
 
-	if len(msg.Extra) != 2 {
-		t.Errorf("extra fields in %v (expect only file and line)", msg.Extra)
-		return
-	}
+	require.Len(t, msg.Extra, 2, "expect only file and line")
 }
 
 func TestWriteBigMessageTCP(t *testing.T) {
 	randData := make([]byte, 4096)
-	if _, err := rand.Read(randData); err != nil {
-		t.Errorf("cannot get random data: %s", err)
-		return
-	}
+	_, err := rand.Read(randData)
+	require.NoError(t, err)
+
 	msgData := "awesomesauce\n" + base64.StdEncoding.EncodeToString(randData)
 
-	msg, err := sendAndRecvTCP(msgData)
-	if err != nil {
-		t.Errorf("sendAndRecv: %s", err)
-		return
-	}
+	msg := sendAndRecvTCP(t, msgData)
 
-	assertMessages(msg, "awesomesauce", msgData, t)
+	assertMessages(t, msg, "awesomesauce", msgData)
 }
 
 func TestWriteMultiPacketMessageTCP(t *testing.T) {
 	randData := make([]byte, 150000)
-	if _, err := rand.Read(randData); err != nil {
-		t.Errorf("cannot get random data: %s", err)
-		return
-	}
+	_, err := rand.Read(randData)
+	require.NoError(t, err)
+
 	msgData := "awesomesauce\n" + base64.StdEncoding.EncodeToString(randData)
 
-	msg, err := sendAndRecvTCP(msgData)
-	if err != nil {
-		t.Errorf("sendAndRecv: %s", err)
-		return
-	}
+	msg := sendAndRecvTCP(t, msgData)
 
-	assertMessages(msg, "awesomesauce", msgData, t)
+	assertMessages(t, msg, "awesomesauce", msgData)
 }
 
 func TestExtraDataTCP(t *testing.T) {
@@ -159,194 +119,132 @@ func TestExtraDataTCP(t *testing.T) {
 		RawExtra: []byte(`{"woo": "hoo"}`),
 	}
 
-	msg, err := sendAndRecvMsgTCP(&m)
-	if err != nil {
-		t.Errorf("sendAndRecvMsgTCP: %s", err)
-		return
-	}
-
-	assertMessages(msg, short, full, t)
-
-	if len(msg.Extra) != 3 {
-		t.Errorf("extra extra fields in %v", msg.Extra)
-		return
-	}
-
-	if int64(msg.Extra["_a"].(float64)) != extra["_a"].(int64) {
-		t.Errorf("_a didn't roundtrip (%v != %v)", int64(msg.Extra["_a"].(float64)), extra["_a"].(int64))
-		return
-	}
-
-	if string(msg.Extra["_file"].(string)) != extra["_file"] {
-		t.Errorf("_file didn't roundtrip (%v != %v)", msg.Extra["_file"].(string), extra["_file"].(string))
-		return
-	}
-
-	if int(msg.Extra["_line"].(float64)) != extra["_line"].(int) {
-		t.Errorf("_line didn't roundtrip (%v != %v)", int(msg.Extra["_line"].(float64)), extra["_line"].(int))
-		return
-	}
+	msg := sendAndRecvMsgTCP(t, &m)
+	assertMessages(t, msg, short, full)
+	require.Len(t, msg.Extra, 3)
+	require.Equalf(t, extra["_a"].(int64), int64(msg.Extra["_a"].(float64)), "_a didn't roundtrip")
+	require.Equalf(t, extra["_file"].(string), msg.Extra["_file"].(string), "_file didn't roundtrip")
+	require.Equalf(t, extra["_line"].(int), int(msg.Extra["_line"].(float64)), "_line didn't roundtrip")
 }
 
 func TestWrite2MessagesWithConnectionDropTCP(t *testing.T) {
 	msgData1 := "First message\nThis happens before the connection drops"
 	msgData2 := "Second message\nThis happens after the connection drops"
 
-	msg1, msg2, err := sendAndRecv2MessagesWithDropTCP(msgData1, msgData2)
-	if err != nil {
-		t.Errorf("sendAndRecv2MessagesWithDropTCP: %s", err)
-		return
-	}
-
-	assertMessages(msg1, "First message", msgData1, t)
-	assertMessages(msg2, "Second message", msgData2, t)
+	msg1, msg2 := sendAndRecv2MessagesWithDropTCP(t, msgData1, msgData2)
+	assertMessages(t, msg1, "First message", msgData1)
+	assertMessages(t, msg2, "Second message", msgData2)
 }
 
 func TestWrite2MessagesWithServerDropTCP(t *testing.T) {
 	msgData1 := "First message\nThis happens before the server drops"
 	msgData2 := "Second message\nThis happens after the server drops"
 
-	msg1, err := sendAndRecv2MessagesWithServerDropTCP(msgData1, msgData2)
-	if err != nil {
-		t.Errorf("sendAndRecv2MessagesWithDropTCP: %s", err)
-		return
-	}
+	msg1 := sendAndRecv2MessagesWithServerDropTCP(t, msgData1, msgData2)
 
-	assertMessages(msg1, "First message", msgData1, t)
+	assertMessages(t, msg1, "First message", msgData1)
 }
 
-func setupConnections() (*TCPReader, chan string, chan string, *TCPWriter, error) {
-	r, closeSignal, doneSignal, err := newTCPReader("127.0.0.1:0")
+func setupConnections(t *testing.T) (*TCPReader, chan string, chan string, *TCPWriter) {
+	t.Helper()
 
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("newTCPReader: %s", err)
-	}
+	r, closeSignal, doneSignal, err := newTCPReader("127.0.0.1:0")
+	require.NoError(t, err)
 
 	w, err := NewTCPWriter(r.addr())
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("NewTCPWriter: %s", err)
-	}
+	require.NoError(t, err)
 
-	return r, closeSignal, doneSignal, w, nil
+	return r, closeSignal, doneSignal, w
 }
 
-func sendAndRecvTCP(msgData string) (*Message, error) {
-	r, closeSignal, doneSignal, w, err := setupConnections()
-	if err != nil {
-		return nil, err
-	}
+func sendAndRecvTCP(t *testing.T, msgData string) *Message {
+	t.Helper()
 
-	if _, err = w.Write([]byte(msgData)); err != nil {
-		return nil, fmt.Errorf("w.Write: %s", err)
-	}
+	r, closeSignal, doneSignal, w := setupConnections(t)
+
+	_, err := w.Write([]byte(msgData))
+	require.NoError(t, err)
 
 	closeSignal <- "stop"
 	done := <-doneSignal
-	if done != "done" {
-		return nil, errors.New("Wrong signal received")
-	}
+	require.Equalf(t, "done", done, "Wrong signal received")
 
 	message, err := r.readMessage()
-	if err != nil {
-		return nil, fmt.Errorf("r.readMessage: %s", err)
-	}
+	require.NoError(t, err)
 
-	return message, nil
+	return message
 }
 
-func sendAndRecvMsgTCP(msg *Message) (*Message, error) {
-	r, closeSignal, doneSignal, w, err := setupConnections()
-	if err != nil {
-		return nil, err
-	}
+func sendAndRecvMsgTCP(t *testing.T, msg *Message) *Message {
+	t.Helper()
 
-	if err = w.WriteMessage(msg); err != nil {
-		return nil, fmt.Errorf("w.Write: %s", err)
-	}
+	r, closeSignal, doneSignal, w := setupConnections(t)
+
+	require.NoError(t, w.WriteMessage(msg))
 
 	closeSignal <- "stop"
 	done := <-doneSignal
-	if done != "done" {
-		return nil, errors.New("Wrong signal received")
-	}
+	require.Equalf(t, "done", done, "Wrong signal received")
 
 	w.Close()
 	message, err := r.readMessage()
-	if err != nil {
-		return nil, fmt.Errorf("r.readMessage: %s", err)
-	}
+	require.NoError(t, err)
 
-	return message, nil
+	return message
 }
 
-func sendAndRecv2MessagesWithDropTCP(msgData1 string, msgData2 string) (*Message, *Message, error) {
-	r, closeSignal, doneSignal, w, err := setupConnections()
-	if err != nil {
-		return nil, nil, err
-	}
+func sendAndRecv2MessagesWithDropTCP(t *testing.T, msgData1 string, msgData2 string) (*Message, *Message) {
+	t.Helper()
 
-	if _, err = w.Write([]byte(msgData1)); err != nil {
-		return nil, nil, fmt.Errorf("w.Write: %s", err)
-	}
+	r, closeSignal, doneSignal, w := setupConnections(t)
+
+	_, err := w.Write([]byte(msgData1))
+	require.NoError(t, err)
 
 	time.Sleep(200 * time.Millisecond)
 
 	closeSignal <- "drop"
 	done := <-doneSignal
-	if done != "done" {
-		return nil, nil, fmt.Errorf("Wrong signal received: %s", done)
-	}
+	require.Equalf(t, "done", done, "Wrong signal received")
 
 	message1, err := r.readMessage()
-	if err != nil {
-		return nil, nil, fmt.Errorf("readmessage: %s", err)
-	}
+	require.NoError(t, err)
 
 	// Need to write twice to force the detection of the dropped connection
-	if _, err = w.Write([]byte(msgData2)); err != nil {
-		return nil, nil, fmt.Errorf("write 1 w.Write: %s", err)
-	}
+	_, err = w.Write([]byte(msgData2))
+	require.NoErrorf(t, err, "write 1")
+
 	time.Sleep(200 * time.Millisecond)
-	if _, err = w.Write([]byte(msgData2)); err != nil {
-		return nil, nil, fmt.Errorf("write 2 w.Write: %s", err)
-	}
+	_, err = w.Write([]byte(msgData2))
+	require.NoErrorf(t, err, "write 2")
+
 	time.Sleep(200 * time.Millisecond)
 
 	closeSignal <- "stop"
 	done = <-doneSignal
-	if done != "done" {
-		return nil, nil, errors.New("Wrong signal received")
-	}
+	require.Equalf(t, "done", done, "Wrong signal received")
 
 	message2, err := r.readMessage()
-	if err != nil {
-		return nil, nil, fmt.Errorf("readmessage: %s", err)
-	}
+	require.NoError(t, err)
 
 	w.Close()
-	return message1, message2, nil
+	return message1, message2
 }
 
-func sendAndRecv2MessagesWithServerDropTCP(msgData1 string, msgData2 string) (*Message, error) {
-	r, closeSignal, doneSignal, w, err := setupConnections()
-	if err != nil {
-		return nil, err
-	}
+func sendAndRecv2MessagesWithServerDropTCP(t *testing.T, msgData1 string, msgData2 string) *Message {
+	t.Helper()
 
-	if _, err = w.Write([]byte(msgData1)); err != nil {
-		return nil, fmt.Errorf("w.Write: %s", err)
-	}
+	r, closeSignal, doneSignal, w := setupConnections(t)
+
+	_, err := w.Write([]byte(msgData1))
+	require.NoError(t, err)
 
 	closeSignal <- "stop"
 	done := <-doneSignal
-	if done != "done" {
-		return nil, fmt.Errorf("Wrong signal received: %s", done)
-	}
+	require.Equalf(t, "done", done, "Wrong signal received")
 
 	message1, err := r.readMessage()
-	if err != nil {
-		return nil, fmt.Errorf("readmessage: %s", err)
-	}
+	require.NoError(t, err)
 
 	// Need to write twice to force the detection of the dropped connection
 	// The first write will not cause an error, but the subsequent ones will
@@ -358,5 +256,5 @@ func sendAndRecv2MessagesWithServerDropTCP(msgData1 string, msgData2 string) (*M
 	}
 
 	w.Close()
-	return message1, nil
+	return message1
 }
