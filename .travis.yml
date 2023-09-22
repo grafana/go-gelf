@@ -1,11 +1,8 @@
 language: go
 go:
-  - 1.8.x
+  - 1.17.x
   - tip
 script:
   - go generate ./gelf/... 
   - go vet -v ./gelf/...
   - go test -v -race ./gelf/...
-branches:
-  only:
-  - master
