@@ -27,6 +27,9 @@ func TestReader(t *testing.T) {
 	//message that is sent in 128 chunks
 	chunked4 := createMessage("e", chunkedDataLen*127)
 	chunkedBytes4 := prepareUDPMessages(t, chunked4)
+	//message larger than ChunkSize that the sender did not chunk
+	notChunkedLarge := createMessage("f", ChunkSize*3)
+	notChunkedLargeBytes := prepareSingleUDPMessage(t, notChunkedLarge)
 
 	tests := map[string]struct {
 		udpMessagesToSend [][]byte
@@ -60,6 +63,10 @@ func TestReader(t *testing.T) {
 		"expected messages to be received even if it's split into 128 chunks": {
 			udpMessagesToSend: chunkedBytes4,
 			expectedMessages:  []Message{chunked4},
+		},
+		"expected not chunked message larger than ChunkSize to be received": {
+			udpMessagesToSend: [][]byte{notChunkedLargeBytes},
+			expectedMessages:  []Message{notChunkedLarge},
 		},
 	}
 
@@ -131,6 +138,16 @@ func createMessage(char string, originMessageLength int) Message {
 		Facility: "reader_test",
 		Extra:    nil,
 	}
+}
+
+// prepareSingleUDPMessage encodes the message into one datagram without applying
+// GELF chunking, the way senders that do not implement the chunking protocol do.
+func prepareSingleUDPMessage(t *testing.T, message Message) []byte {
+	enc, err := json.Marshal(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return enc
 }
 
 func prepareUDPMessages(t *testing.T, message Message) [][]byte {
