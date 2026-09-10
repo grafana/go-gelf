@@ -21,6 +21,13 @@ const (
 	//according to Gelf specification, all chunks must be received within 5 seconds. see:https://docs.graylog.org/docs/gelf
 	maxMessageTimeout             = 5 * time.Second
 	defarmentatorsCleanUpInterval = 5 * time.Second
+	// maxDatagramSize is the largest payload a single UDP datagram can carry:
+	// 65535 bytes minus the 8 byte UDP header and the 20 byte IPv4 header.
+	// Senders are free to deliver a message that is not chunked in one datagram
+	// of any size up to this limit, so the read buffer must be able to hold one
+	// in full. net.UDPConn.Read discards whatever does not fit without reporting
+	// an error, which would leave a truncated message that fails to decode.
+	maxDatagramSize = 65507
 )
 
 type Reader struct {
@@ -29,6 +36,10 @@ type Reader struct {
 	messageDefragmentators map[string]*defragmentator
 	done                   chan struct{}
 	maxMessageTimeout      time.Duration
+	// bufPool hands out the datagram sized read buffers. Pooling them avoids
+	// allocating 64 KiB for every message read, while still giving concurrent
+	// callers a buffer each.
+	bufPool sync.Pool
 }
 
 // NewReader creates a reader for specified addr
@@ -53,6 +64,10 @@ func newReader(addr string, maxMessageTimeout time.Duration, defarmentatorsClean
 	r.conn = conn
 	r.messageDefragmentators = make(map[string]*defragmentator)
 	r.done = make(chan struct{})
+	r.bufPool = sync.Pool{New: func() interface{} {
+		buf := make([]byte, maxDatagramSize)
+		return &buf
+	}}
 	r.initDefragmentatorsCleanup(defarmentatorsCleanUpInterval)
 	return r, nil
 }
@@ -88,7 +103,9 @@ func (r *Reader) Read(p []byte) (int, error) {
 // and continue reading the message from the connection until it receives the last chunk of any previously received messages or if the reader receives not chunked message.
 // In this case, not chunked message will be returned immediately.
 func (r *Reader) ReadMessage() (*Message, error) {
-	cBuf := make([]byte, ChunkSize)
+	bufPtr := r.bufPool.Get().(*[]byte)
+	defer r.bufPool.Put(bufPtr)
+	cBuf := *bufPtr
 	var (
 		err       error
 		n         int
@@ -99,12 +116,19 @@ func (r *Reader) ReadMessage() (*Message, error) {
 
 	for {
 		// we need to reset buffer length because we change the length of the buffer to `n` after the reading data from connection
-		cBuf = cBuf[:ChunkSize]
+		cBuf = cBuf[:maxDatagramSize]
 		if n, err = r.conn.Read(cBuf); err != nil {
 			return nil, fmt.Errorf("Read: %s", err)
 		}
+		// the read buffer is reused across messages, so it may still hold bytes of
+		// an earlier datagram past the n bytes just read. Truncate before looking
+		// at the head to keep those stale bytes out of the message.
+		cBuf = cBuf[:n]
+		if len(cBuf) < 2 {
+			return nil, fmt.Errorf("message size must be at least %v bytes", 2)
+		}
 		// first two bytes contains hardcoded values [0x1e, 0x0f] if message is chunked
-		chunkHead, cBuf = cBuf[:2], cBuf[:n]
+		chunkHead = cBuf[:2]
 		if bytes.Equal(chunkHead, magicChunked) {
 			if len(cBuf) <= chunkedHeaderLen {
 				return nil, fmt.Errorf("chunked message size must be greather than %v", chunkedHeaderLen)
